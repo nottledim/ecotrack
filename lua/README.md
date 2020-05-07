@@ -2,9 +2,9 @@
 #### lua program ecotrack.lua
 
 ## Installation
- You'll need root access to the Prism to install these programs.  Choose your preferred:
+ You'll need root access to the Prism to install these programs.
 
-- Lua program ecotrack.lua requires bit logic, cjson and posix which must be installed:
+ Lua program ecotrack.lua requires bit logic, cjson and posix which must be installed:
 
         opkg install luabitop
         opkg install lua-cjson

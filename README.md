@@ -13,9 +13,9 @@ lua program.  The functions of both are much the same.
 ### Origin
 ecotrack.lua: a mash of the original:
 
-1 github.com/mastrogippo/Prism-UBUS-MQTT-LUA-daemon, 
-1 MQTT example https://github.com/karlp/lua-mosquitto-examples
-1 and my own site needs
+1. github.com/mastrogippo/Prism-UBUS-MQTT-LUA-daemon, 
+1. MQTT example https://github.com/karlp/lua-mosquitto-examples
+1. and my own site needs
 
 ## Prism
 
@@ -41,7 +41,7 @@ Control of the program is by simply sending an MQTT message. This is
 quite easy to send from "home assistant" for example.  It may not be
 necessary to change the mode from "auto" if that is your preference..
 
-1 TOPIC_CONTROL (cmnd/prism/mode) allows you to change the operation
+1. TOPIC_CONTROL (cmnd/prism/mode) allows you to change the operation
 mode from "auto" where it tracks the house feed current to a fixed
 maximum current value.
 
@@ -50,7 +50,7 @@ maximum current value.
 * "min"  set the current to the minimum permitted (6A)
 * number set the max current to given value
 
-2 TOPIC_DATA (emon/data) is a message from your monitoring device. It
+2. TOPIC_DATA (emon/data) is a message from your monitoring device. It
 expects a JSON encoded message comprising the following properties:
 
 * "type" is the type of message and only "power" is used (other types are ignored)

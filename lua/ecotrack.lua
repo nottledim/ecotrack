@@ -40,7 +40,6 @@ local topics = {
    data = conf["topic_data"] or "emon/data",
    mode = conf["topic_control"] or "cmnd/prism/mode",
    status = "cmnd/prism/status",
-   dcurr = "cmnd/prism/dcurr"
 }
 
 local function setup_ubus()
@@ -186,7 +185,7 @@ local function handle_ON_MESSAGE(mid, topic, payload, qos, retain)
 	    st.cmax = status.current_max
 	    st.mode = mode
 	    st.energy = string.format("%.1fkW.h", status.energy_session / 1000)
-	    st.time = os.date("!%X", status._session_time_stm)
+	    st.period = os.date("!%X", status._session_time_stm)
 	    local mid = mqtt:publish(conf["topic_pub_status"], cjson.encode(st), 0, false)
 	 end
       end

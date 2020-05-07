@@ -2,7 +2,7 @@
 ### Shell script ecotrack.sh
 
 ## Installation
- You'll need root access to the Prism to install these programs.  Choose your preferred:
+ You'll need root access to the Prism to install these programs.
 
  Shell script ecotrack.sh can be run from the shell or at startup from /etc/rc.local.
   It's best to detach it as in
