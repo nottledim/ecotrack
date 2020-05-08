@@ -1,45 +1,65 @@
 #!/usr/bin/lua
---[[ 6-May-2020 RJM - ecotrack: a mash of the original:
+--[[
+   Lua program - ecotrack.lua
+   Copyright (C) 2020 R.J.Middleton   e-mail: dick@lingbrae.com
+   GPL3 - GNU General Public License version 3 or later
+
+   Original:   6-May-20
+]]
+local VERSION = [[
+   Last-modified: 2020-05-08  17:23:42 on penguin.lingbrae" ]]
+--[[
+   Description :  ecotrack: a mash of the original:
    a) github.com/mastrogippo/Prism-UBUS-MQTT-LUA-daemon, 
    b) MQTT example https://github.com/karlp/lua-mosquitto-examples
    c) and my own site needs
-   ]]
+--]]
 
-local bit = require "bit"
-local ins = require "inspect"
-local ubus = require "ubus"
-local cjson = require "cjson"
+local pl = require("pl")     -- penlight
+
+local bit = require "bit"    -- bitop
+local ubus = require "ubus" 
+local cjson = require "cjson" -- cjson
 local uloop = require "uloop"
 local mosq = require("mosquitto")
-local loadc = require "loadc"
-local signal = require("posix.signal")
-local conf = loadc.load("ecotrack.cfg");
+local posix = require("posix")
+
+local opts = lapp [[
+Controls the Prism EVSE
+    -d,--daemon   Run as daemon
+    -q,--quiet    Suppress messages
+    -c,--config (optional string) Path to config file
+    -v,--version  Version
+  ]]
+
+local confile = opts.config or (app.require_here() .. "ecotrack.cfg")
+local conf = config.read (confile, {keysep=':'})
+if not conf then
+   utils.quit("Failed to read config file: %s", confile)
+end
 
 local cmin= tonumber(conf["min_curr"] or 6)
 local cmax = tonumber(conf["max_curr"] or 16)   -- max avail from solar
-local umax = tonumber(conf["max_uvse"] or 32)   -- max from evse
+local umax = tonumber(conf["max_evse"] or 32)   -- max from evse
 local hyst = tonumber(conf["hysteresis"] or 0.93)
 
 local last = -1
 local curr = 0
 local mode = "auto"
 
-local quiet = conf["quiet"]
-
-signal.signal(signal.SIGINT,
-	      function(signum)
-		 io.write("trapped SIGINT");
-		 io.write("\n")
-		 -- put code to save some stuff here
-		 os.exit(128 + signum)
-	      end
-	     )
+posix.signal(posix.SIGINT,
+	     function(signum)
+		io.write("trapped SIGINT");
+		io.write("\n")
+		-- put code to save some stuff here
+		os.exit(128 + signum)
+	     end
+)
 
 local MOSQ_IDLE_LOOP_MS = 250
 local topics = {
    data = conf["topic_data"] or "emon/data",
-   mode = conf["topic_control"] or "cmnd/prism/mode",
-   status = "cmnd/prism/status",
+   mode = conf["topic_control"] or "cmnd/prism/mode"
 }
 
 local function setup_ubus()
@@ -54,26 +74,47 @@ local function setup_ubus()
 end
 
 local printf = function(...)
+   utils.fprintf(io.stderr, ...)
    --print(string.format(...))
-   io.stderr:write(string.format(...) .. "\n")
+   --io.stderr:write(string.format(...) .. "\n")
 end
 local printv = function(...)
-   if not quiet then
-      print(string.format(...))
+   if not opts.quiet then
+      utils.fprintf(io.stderr, ...)
    end
 end
 
-printv("Ecotrack starting")
+-- ============================================================
+
+if opts.version then
+   printv("Config: %s\n", pretty.write(conf))
+   utils.quit("Version: %s", VERSION )
+end
+
+if opts.daemon then
+   local pid1 = posix.fork()
+   if pid1 ~= 0 then
+      posix.wait()
+      os.exit()
+   else
+      local pid2 = posix.fork()
+      if pid2 ~= 0 then
+	 os.exit()
+      end
+   end
+end
+
+printv("Ecotrack starting\n")
 uloop.init()
 mosq.init()
 local uconn = setup_ubus()
 local mqtt
---printf(ins.inspect(conf))
+--printf(pretty.write(conf))
 
 local get_status = function()
    local status = uconn:call("evse.control", "get_status", {})--{ name = "eth0" })
    if status == nil then
-      printf("UBUS ERROR - status: no answer from EVSE")
+      printf("UBUS ERROR - status: no answer from EVSE\n")
       do return end
    end
    return status.result.ports[1]
@@ -85,10 +126,10 @@ local change_current = function()
       tm = os.date("%X") --`date +%T`
       local status = uconn:call("evse.control", "set_current", {port = 1, current_max = curr} )
       if status == nil then
-	 printf("UBUS ERROR - no answer from EVSE")
+	 printf("UBUS ERROR - no answer from EVSE\n")
 	 do return end
       else
-	 printv( "%s - Current set to %dA", tm, curr)
+	 printv( "%s - Current set to %dA\n", tm, curr)
 	 if conf["topic_pub_ca"] then
 	    local mid = mqtt:publish(conf["topic_pub_ca"], tostring(curr), 0, false)
 	 end
@@ -142,11 +183,8 @@ local function handle_mqtt_status(tag, rc, errno, errstr)
 end
 
 local function handle_ON_MESSAGE(mid, topic, payload, qos, retain)
-   if payload == "quit" then
-      printf("magic quit payload for valgrind!")
-      uloop.cancel()
       
-   elseif topic == topics.data then
+   if topic == topics.data then
       local emon = cjson.decode(tostring(payload))
       if emon.type == 'power' then
 	 local incr = math.floor(emon.pwr1 *-hyst/emon.volts +64) -63
@@ -168,7 +206,7 @@ local function handle_ON_MESSAGE(mid, topic, payload, qos, retain)
 	       end
 	    end
 	 end
-         --printf("Flow: %.1f Solar: %.1f  Surplus: %.1f  Incr: %s", emon.pwr1, emon.pwr2, surplus, incr)
+         --printf("Flow: %.1f Solar: %.1f  Surplus: %.1f  Incr: %s\n", emon.pwr1, emon.pwr2, surplus, incr)
       elseif emon.type == 'day' and conf["topic_pub_status"] then
 	 local status = get_status()
 	 if status then
@@ -191,24 +229,30 @@ local function handle_ON_MESSAGE(mid, topic, payload, qos, retain)
       end
 	 
    elseif topic == topics.mode then
-      local f = cmdtab[tostring(payload)]
-      if f then
-	 printv("Change mode: %s", payload)
-	 f()
-      elseif tonumber(payload) ~= nil then
-	 curr = tonumber(payload)
-	 mode = "manual"
-	 change_current()
-      else
-	 printf("ON_MESSAGE: topic:%s payload: %s", topic, payload)
-      end
+      if payload == "eXit" then
+	 uloop.cancel()
+	 utils.quit("Ecotrack terminated")
       
-   elseif topic == topics.status then
-      local status = get_status()
-      printf("Status: " .. ins.inspect(status))
+      elseif payload == "sTatus" then
+	 local status = get_status()
+	 printf("Status: \n" .. pretty.write(status))
+
+      else
+	 local f = cmdtab[tostring(payload)]
+	 if f then
+	    printv("Change mode: %s\n", payload)
+	    f()
+	 elseif tonumber(payload) ~= nil then
+	    curr = tonumber(payload)
+	    mode = "manual"
+	    change_current()
+	 else
+	    printf("ON_MESSAGE: topic:%s payload: %s\n", topic, payload)
+	 end
+      end
 
    else -- unexpected topic
-      printf("ON_MESSAGE: topic:%s", topic)
+      printf("ON_MESSAGE: topic:%s\n", topic)
    end
 end
 
@@ -306,21 +350,22 @@ local function mqtt_calculate_reconnect(st)
    return 5000
 end
 
+--[[
 --UBUS notify
 local sub = {
    notify = function( msg, a, b )
 
       -- Ho la roba  su a!!!
-      printf("got ubus=" .. ins.inspect(msg));
-      printf("a=" .. ins.inspect(a));
-      printf("b=" .. ins.inspect(b));
+      printf("got ubus=" .. pretty.write(msg));
+      printf("a=" .. pretty.write(a));
+      printf("b=" .. pretty.write(b));
 
       if msg['voltage_now'] == nil then
 	 printf("status_message");
 	 do return end
       end
 
-      --printf("MSG: "  .. ins.inspect(msg));
+      --printf("MSG: "  .. pretty.write(msg));
       if msg["port"] == 1 then
 	 if msg['status'] == "error" then
 	    printf("Error in SUB");
@@ -332,12 +377,12 @@ local sub = {
 
    remove = function( a, b)
       --faccio partire un timer che riprova a collegardsi con subscribe
-      printf("a=" .. ins.inspect(a));
-      printf("b=" .. ins.inspect(b));
+      printf("a=" .. pretty.write(a));
+      printf("b=" .. pretty.write(b));
 
    end,
 }
-
+]]
 
 local function main()
    mqtt = mosq.new()
@@ -374,3 +419,10 @@ Karl Palsson, 2016 <karlp@tweak.net.au>
 Not entirely happy with how verbose it is, with flags, but uses only 
 the async methods, and successfully reconnects well.
 ]]
+
+--[[
+ Local Variables:
+ mode: lua
+ time-stamp-pattern: "30/Last-modified:[ \t]+%:y-%02m-%02d  %02H:%02M:%02S on %h"
+ End:
+--]]

@@ -57,12 +57,3 @@ expects a JSON encoded message comprising the following properties:
 * "pwr1" is the house feed power in watts. Positive is import, negative is export.
 * "volts" is the mains voltage at the time of the measurement.  It's used to compute the current.
 * Other values are not used at this time.
-
-### Notes
-The following debug features currently exist:
-
-+ Any MQTT message received by ecotrack.lua with message "quit" will terminate the program.
-+ Sending topic cmnd/prism/status will cause ecotrack.lua to emit the EVSE status on stderr.
-
-Modifications to the lua program will most likely be in function
-handle_ON_MESSAGE where the MQTT messages are processed.
