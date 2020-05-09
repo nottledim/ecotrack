@@ -7,7 +7,7 @@
    Original:   6-May-20
 ]]
 local VERSION = [[
-   Last-modified: 2020-05-08  17:23:42 on penguin.lingbrae" ]]
+   Last-modified: 2020-05-09  17:12:43 on penguin.lingbrae" ]]
 --[[
    Description :  ecotrack: a mash of the original:
    a) github.com/mastrogippo/Prism-UBUS-MQTT-LUA-daemon, 
@@ -15,28 +15,48 @@ local VERSION = [[
    c) and my own site needs
 --]]
 
-local pl = require("pl")     -- penlight
+require "pl"       -- penlight (app, lapp, config, utils)
 
-local bit = require "bit"    -- bitop
-local ubus = require "ubus" 
+require "bit"    -- bitop
+require "ubus" 
+require "uloop"
+local signal = require "posix.signal"
+local sys = require "posix.unistd"
+local syswait = require 'posix.sys.wait'
 local cjson = require "cjson" -- cjson
-local uloop = require "uloop"
-local mosq = require("mosquitto")
-local posix = require("posix")
+local mosq = require "mosquitto"
+local srcdir = app.require_here()
+local log = require "log"
 
+local MOSQ_IDLE_LOOP_MS = 250
+local UBUS_IDLE_LOOP_MS = 250
+local CONFIG_FILE_NAME = "ecotrack.cfg"
+local LOG_FILE_NAME = "/tmp/ecotrack.log"
+
+lapp.add_type ("level", "string",
+	       function(v)
+		  lapp.assert(log.levels[v] ~= null, "unknown level " .. v)
+	       end
+)
 local opts = lapp [[
 Controls the Prism EVSE
     -d,--daemon   Run as daemon
-    -q,--quiet    Suppress messages
+    -q,--quiet    Suppress messages (set level to warn)
     -c,--config (optional string) Path to config file
-    -v,--version  Version
+    -l,--level (optional level default info) log level (fatal, error, warn, info, debug, trace)
+    -v,--version  Print version info
   ]]
 
-local confile = opts.config or (app.require_here() .. "ecotrack.cfg")
-local conf = config.read (confile, {keysep=':'})
+local confile = opts.config or path.normpath(srcdir .. CONFIG_FILE_NAME)
+local conf = config.read (confile, {keysep=' '})
 if not conf then
    utils.quit("Failed to read config file: %s", confile)
 end
+
+local topics = {
+   data = conf["topic_data"] or "emon/data",
+   mode = conf["topic_control"] or "cmnd/prism/mode"
+}
 
 local cmin= tonumber(conf["min_curr"] or 6)
 local cmax = tonumber(conf["max_curr"] or 16)   -- max avail from solar
@@ -47,24 +67,18 @@ local last = -1
 local curr = 0
 local mode = "auto"
 
-posix.signal(posix.SIGINT,
-	     function(signum)
-		io.write("trapped SIGINT");
-		io.write("\n")
-		-- put code to save some stuff here
-		os.exit(128 + signum)
-	     end
+signal.signal(signal.SIGINT,
+       function(signum)
+	  io.write("trapped SIGINT");
+	  io.write("\n")
+	  -- put code to save some stuff here
+	  os.exit(128 + signum)
+       end
 )
-
-local MOSQ_IDLE_LOOP_MS = 250
-local topics = {
-   data = conf["topic_data"] or "emon/data",
-   mode = conf["topic_control"] or "cmnd/prism/mode"
-}
 
 local function setup_ubus()
    --connect UBUS
-   local conn = ubus.connect(null, 250)
+   local conn = ubus.connect(null, UBUS_IDLE_LOOP_MS)
    if not conn then
       error("Failed to connect to ubusd")
       do return end
@@ -72,39 +86,46 @@ local function setup_ubus()
    conn:subscribe( "evse.control", {} )
    return conn
 end
+if opts.daemon then
+   log.level = "warn"
+   log.outfile = LOG_FILE_NAME
+elseif opts.quiet then
+   log.level = "warn"
+end
 
-local printf = function(...)
-   utils.fprintf(io.stderr, ...)
+local printf = function(fmt, ...)
+   utils.fprintf(io.stderr, "[%s] " .. fmt, os.date("%X"), ...)
    --print(string.format(...))
    --io.stderr:write(string.format(...) .. "\n")
 end
 local printv = function(...)
    if not opts.quiet then
-      utils.fprintf(io.stderr, ...)
+      printf(...)
    end
 end
 
 -- ============================================================
 
 if opts.version then
-   printv("Config: %s\n", pretty.write(conf))
-   utils.quit("Version: %s", VERSION )
+   log.info("Config: %s", pretty.write(conf))
+   local v = utils.split(VERSION, "%s+")
+   utils.quit("Version: %s %s", v[3], v[4])
 end
 
 if opts.daemon then
-   local pid1 = posix.fork()
+   local pid1 = sys.fork()
    if pid1 ~= 0 then
-      posix.wait()
+      syswait.wait()
       os.exit()
    else
-      local pid2 = posix.fork()
+      local pid2 = sys.fork()
       if pid2 ~= 0 then
 	 os.exit()
       end
    end
 end
 
-printv("Ecotrack starting\n")
+log.info("Ecotrack starting")
 uloop.init()
 mosq.init()
 local uconn = setup_ubus()
@@ -114,7 +135,7 @@ local mqtt
 local get_status = function()
    local status = uconn:call("evse.control", "get_status", {})--{ name = "eth0" })
    if status == nil then
-      printf("UBUS ERROR - status: no answer from EVSE\n")
+      log.error("UBUS ERROR - status: no answer from EVSE")
       do return end
    end
    return status.result.ports[1]
@@ -123,13 +144,12 @@ end
 local change_current = function()
    if  curr ~= last  then
       last = curr 
-      tm = os.date("%X") --`date +%T`
       local status = uconn:call("evse.control", "set_current", {port = 1, current_max = curr} )
       if status == nil then
-	 printf("UBUS ERROR - no answer from EVSE\n")
+	 log.error("UBUS ERROR - no answer from EVSE")
 	 do return end
       else
-	 printv( "%s - Current set to %dA\n", tm, curr)
+	 log.info( "Current set to %dA", curr)
 	 if conf["topic_pub_ca"] then
 	    local mid = mqtt:publish(conf["topic_pub_ca"], tostring(curr), 0, false)
 	 end
@@ -163,9 +183,11 @@ last = get_status().current_max
 local f = cmdtab[conf["start_mode"] or "auto"]
 if f then f() end
 
+--[[
 local function ends_with(str, ending)
    return ending == "" or str:sub(-#ending) == ending 
 end
+]]
 
 local state = { mqtt_reconnection_count = 0 }
 
@@ -177,7 +199,7 @@ end
 
 local function handle_mqtt_status(tag, rc, errno, errstr)
    if errno then
-      printf("Unexpected MQTT Status(%s):%d-> %s\n", tag, errno, errstr)
+      log.warn("Unexpected MQTT Status(%s):%d-> %s", tag, errno, errstr)
       cleanup_mqtt()
    end
 end
@@ -206,7 +228,7 @@ local function handle_ON_MESSAGE(mid, topic, payload, qos, retain)
 	       end
 	    end
 	 end
-         --printf("Flow: %.1f Solar: %.1f  Surplus: %.1f  Incr: %s\n", emon.pwr1, emon.pwr2, surplus, incr)
+         log.debug("Flow: %.1f Solar: %.1f  Surplus: %.1f  Incr: %s\n", emon.pwr1, emon.pwr2, surplus, incr)
       elseif emon.type == 'day' and conf["topic_pub_status"] then
 	 local status = get_status()
 	 if status then
@@ -235,36 +257,36 @@ local function handle_ON_MESSAGE(mid, topic, payload, qos, retain)
       
       elseif payload == "sTatus" then
 	 local status = get_status()
-	 printf("Status: \n" .. pretty.write(status))
+	 log.info("Status: \n%s", pretty.write(status))
 
       else
 	 local f = cmdtab[tostring(payload)]
 	 if f then
-	    printv("Change mode: %s\n", payload)
+	    log.info("Change mode: %s", payload)
 	    f()
 	 elseif tonumber(payload) ~= nil then
 	    curr = tonumber(payload)
 	    mode = "manual"
 	    change_current()
 	 else
-	    printf("ON_MESSAGE: topic:%s payload: %s\n", topic, payload)
+	    log.warn("ON_MESSAGE: topic:%s payload: %s", topic, payload)
 	 end
       end
 
    else -- unexpected topic
-      printf("ON_MESSAGE: topic:%s\n", topic)
+      log.warn("ON_MESSAGE: topic:%s", topic)
    end
 end
 
 local function handle_ON_LOG(level, string)
-   printf("mq log: %d->%s\n", level, string)
+   log.debug("mq log: %d->%s", level, string)
 end
 
 local function handle_ON_DISCONNECT(was_clean, rc, str)
    if was_clean then
-      printf("Client explicitly requested disconnect\n")
+      log.warn("Client explicitly requested disconnect")
    else
-      printf("Unexpected disconnection: %d -> %s\n", rc, str)
+      log.error("Unexpected disconnection: %d -> %s", rc, str)
    end
    state.mqtt_connected = false
 end
@@ -273,7 +295,7 @@ local function handle_ON_CONNECT(success, rc, str)
    state.mqtt_working = false
    --printf("on connect ->", success, rc, str)
    if not success then
-      printf("Failed to connect: %d : %s\n", rc, str)
+      log.error("Failed to connect: %d : %s", rc, str)
       return
    end
    state.mqtt_connected = true
@@ -281,7 +303,7 @@ local function handle_ON_CONNECT(success, rc, str)
       if not mqtt:subscribe(v, 0) then
 	 -- An abort here is probably wildly overagressive.  could just call cleanup_mqtt() and let it try again.
 	 -- kinda hard to test this? maybe insert a delay in this handler? and stop broker in the meantime?
-	 printf("Aborting, unable to subscribe to MQTT: %s\n", v)
+	 log.fatal("Aborting, unable to subscribe to MQTT: %s", v)
 	 os.exit(1)
       end
    end
@@ -397,7 +419,7 @@ local function main()
 	       uloop.timer(function()
 			      if not pcall(setup_mqtt) then
 				 state.mqtt_reconnection_count = state.mqtt_reconnection_count + 1
-				 printf("Failed mqtt reconnection attempt: %d\n", state.mqtt_reconnection_count)
+				 log.warn("Failed mqtt reconnection attempt: %d", state.mqtt_reconnection_count)
 			      else
 				 state.mqtt_reconnection_count = 0
 			      end
@@ -407,7 +429,7 @@ local function main()
       end, mqtt_calculate_reconnect(state))
    
    uloop.run()
-   printf(">>>post uloop.run()\n")
+   log.info(">>>post uloop.run()")
    cleanup_mqtt()
 end
 
