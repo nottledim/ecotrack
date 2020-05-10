@@ -62,30 +62,28 @@ end
 for i, x in ipairs(modes) do
   local nameupper = x.name:upper()
   log[x.name] = function(fmt, ...)
-    
     -- Return early if we're below the log level
     if i < levels[log.level] then
       return
     end
 
-    local msg = tostring(...)
     local info = debug.getinfo(2, "Sl")
     local lineinfo = info.short_src .. ":" .. info.currentline
 
     -- Output to console
     print(string.format("%s[%s%6s]%s " .. fmt,
                         log.usecolor and x.color or "",
-                        os.date("%H:%M:%S"),
+                        os.date("%X"),
                         nameupper,
                         log.usecolor and "\27[0m" or "",
       --                  lineinfo,
-                        msg))
+                        ...))
 
     -- Output to log file
     if log.outfile then
       local fp = io.open(log.outfile, "a")
-      local str = string.format("[%s%6s] %s: %s\n",
-                                 os.date("%X %d-%b"), nameupper, lineinfo, msg)
+      local str = string.format("[%s%6s] %s: " .. fmt .. "\n",
+                                 os.date("%d-%b %X"), nameupper, lineinfo, ...)
       fp:write(str)
       fp:close()
     end

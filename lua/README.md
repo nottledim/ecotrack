@@ -11,7 +11,8 @@
         opkg install lua-cjson
 	opkg install luaposix
 
-  Ecotrack can run as a daemon: `ecotrack -dq` otherwise it runs in the foreground. 
+  Ecotrack can run as a daemon: `ecotrack -d` otherwise it runs in the foreground. Use "-q" or set level
+  to control log file size.
 
 ## Program
   Ecotrack accepts the following options:
@@ -25,10 +26,10 @@
 The config file is expected to be in same directory as the main script
 unless otherwise specified on the command line.
 
-- Quiet option supresses informational message. Errors are written to stderr anyway.
+- Quiet option forces level to "warn" to supress informational message.
 - Version option prints current configuration and version string. If Quiet then only
   version string is printed.
-- Log messages are printed to /tmp/ecotrack.log when in daemon mode. The level for the log file is 'warn'.
+- Log messages are printed to /tmp/ecotrack.log when in daemon mode.
 
 The program can be terminated with SIGINT or by sending 'eXit' as the
 message to topic-control.
@@ -52,9 +53,11 @@ The file is organised as key:value pairs with space separator.
     topic-data emon/data
     topic-control cmnd/prism/mode
     
-    # emits data on these topics
-    topic-pub-ca stat/prism/cA
+    # emits data on these topics (if given)
+    # Charge state including current
     topic-pub-status stat/prism/status
+    # New current value (only)
+    topic-pub-ca stat/prism/cA
     
     # min current allowed by evse
     min-curr 6
@@ -68,8 +71,7 @@ The file is organised as key:value pairs with space separator.
     start-mode auto
 
 + topic-pub-cA is emitted when the max current value is changed.
-+ topic-pub-status is emitted every minute initiated by receipt of
-  emon/data message with type "day".
++ topic-pub-status is emitted approximately every minute and when current value is changed.
 
 ### Notes
 The following debug features currently exist:

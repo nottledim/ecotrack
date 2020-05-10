@@ -7,7 +7,7 @@
    Original:   6-May-20
 ]]
 local VERSION = [[
-   Last-modified: 2020-05-09  17:12:43 on penguin.lingbrae" ]]
+   Last-modified: 2020-05-10  10:32:40 on penguin.lingbrae" ]]
 --[[
    Description :  ecotrack: a mash of the original:
    a) github.com/mastrogippo/Prism-UBUS-MQTT-LUA-daemon, 
@@ -86,12 +86,15 @@ local function setup_ubus()
    conn:subscribe( "evse.control", {} )
    return conn
 end
-if opts.daemon then
-   log.level = "warn"
-   log.outfile = LOG_FILE_NAME
-elseif opts.quiet then
+
+log.level = opts.level or "warn"
+if opts.quiet then   --  override level setting
    log.level = "warn"
 end
+if opts.daemon then
+   log.outfile = LOG_FILE_NAME
+end
+
 
 local printf = function(fmt, ...)
    utils.fprintf(io.stderr, "[%s] " .. fmt, os.date("%X"), ...)
@@ -131,6 +134,7 @@ mosq.init()
 local uconn = setup_ubus()
 local mqtt
 --printf(pretty.write(conf))
+since = os.time()
 
 local get_status = function()
    local status = uconn:call("evse.control", "get_status", {})--{ name = "eth0" })
@@ -141,11 +145,38 @@ local get_status = function()
    return status.result.ports[1]
 end
 
-local change_current = function()
+local function send_status_message(status)
+   if conf["topic_pub_status"] then
+      if not status then
+	 status = get_status()
+      end
+      if status then
+	 local st = {}
+	 if status.connected then
+	    if status.status == 'charging' then
+	       st.status = 'charging'
+	    else
+	       st.status = 'connected'
+	    end
+	 else
+	    st.status = 'disconnected'
+	 end
+	 st.cmax = status.current_max
+	 st.mode = mode
+	 st.energy = string.format("%.1fkW.h", status.energy_session / 1000)
+	 st.period = os.date("!%X", status._session_time_stm)
+	 local mid = mqtt:publish(conf["topic_pub_status"], cjson.encode(st), 0, false)
+	 log.debug("status message")
+      end
+      since = os.time()
+   end
+end
+
+local change_current = function(status)
    if  curr ~= last  then
       last = curr 
-      local status = uconn:call("evse.control", "set_current", {port = 1, current_max = curr} )
-      if status == nil then
+      local rtn = uconn:call("evse.control", "set_current", {port = 1, current_max = curr} )
+      if rtn == nil then
 	 log.error("UBUS ERROR - no answer from EVSE")
 	 do return end
       else
@@ -153,6 +184,7 @@ local change_current = function()
 	 if conf["topic_pub_ca"] then
 	    local mid = mqtt:publish(conf["topic_pub_ca"], tostring(curr), 0, false)
 	 end
+	 send_status_message(status)
       end
    end
 end
@@ -205,7 +237,6 @@ local function handle_mqtt_status(tag, rc, errno, errstr)
 end
 
 local function handle_ON_MESSAGE(mid, topic, payload, qos, retain)
-      
    if topic == topics.data then
       local emon = cjson.decode(tostring(payload))
       if emon.type == 'power' then
@@ -223,33 +254,21 @@ local function handle_ON_MESSAGE(mid, topic, payload, qos, retain)
 		     elseif curr >  cmax  then
 			curr = cmax
 		     end
-		     change_current()
+		     change_current(status)
 		  end
 	       end
 	    end
 	 end
-         log.debug("Flow: %.1f Solar: %.1f  Surplus: %.1f  Incr: %s\n", emon.pwr1, emon.pwr2, surplus, incr)
-      elseif emon.type == 'day' and conf["topic_pub_status"] then
-	 local status = get_status()
-	 if status then
-	    local st = {}
-	    if status.connected then
-	       if status.status == 'charging' then
-		  st.status = 'charging'
-	       else
-		  st.status = 'connected'
-	       end
-	    else
-	       st.status = 'disconnected'
-	    end
-	    st.cmax = status.current_max
-	    st.mode = mode
-	    st.energy = string.format("%.1fkW.h", status.energy_session / 1000)
-	    st.period = os.date("!%X", status._session_time_stm)
-	    local mid = mqtt:publish(conf["topic_pub_status"], cjson.encode(st), 0, false)
+	 if os.difftime(os.time(), since) >= 60 then
+	    send_status_message()
 	 end
+         log.debug("Flow: %.1f Solar: %.1f  Surplus: %.1f  Incr: %s", emon.pwr1, emon.pwr2, surplus, incr)
+--[[
+      elseif emon.type == 'day' and conf["topic_pub_status"] then
+	 send_status_message()
+]]	 
       end
-	 
+
    elseif topic == topics.mode then
       if payload == "eXit" then
 	 uloop.cancel()
