@@ -7,7 +7,7 @@
    Original:   6-May-20
 --]]
 local VERSION = [[
-   Last-modified: 2020-05-12  17:17:06 on penguin.lingbrae" ]]
+   Last-modified: 2020-05-13  10:22:08 on penguin.lingbrae" ]]
 --[[
    Description :  ecotrack: a mash of the original:
    a) github.com/mastrogippo/Prism-UBUS-MQTT-LUA-daemon, 
@@ -25,8 +25,8 @@ local mosq = require "mosquitto"
 
 app.require_here()
 local log = require "log"
-local system = require "system"
-local et = require "et"
+local system = require "system" -- signal and fork
+local ect = require "ect"       -- ecotrack functions
 
 local MOSQ_IDLE_LOOP_MS = 250
 local UBUS_IDLE_LOOP_MS = 250
@@ -81,7 +81,7 @@ local function handle_ON_CONNECT(success, rc, str)
       return
    end
    state.mqtt_connected = true
-   for _,v in pairs(et.topics) do
+   for _,v in pairs(ect.topics) do
       if not mqtt:subscribe(v, 0) then
 	 -- An abort here is probably wildly overagressive.  could just call cleanup_mqtt() and let it try again.
 	 -- kinda hard to test this? maybe insert a delay in this handler? and stop broker in the meantime?
@@ -120,11 +120,11 @@ end
 --- Initiate a connection, and install event handlers
 --
 local function setup_mqtt()
-   mqtt.ON_MESSAGE = et.handle_ON_MESSAGE
+   mqtt.ON_MESSAGE = ect.handle_ON_MESSAGE
    mqtt.ON_CONNECT = handle_ON_CONNECT
    --mqtt.ON_LOG = handle_ON_LOG
    mqtt.ON_DISCONNECT = handle_ON_DISCONNECT
-   local _, errno, strerr = mqtt:connect_async(et.conf["broker_ip"], et.conf["broker_port"], 60)
+   local _, errno, strerr = mqtt:connect_async(ect.conf["broker_ip"], ect.conf["broker_port"], 60)
    if errno then
       -- Treat this as "fatal", means internal syscalls failed.
       error("Failed to connect: " .. strerr)
@@ -158,7 +158,7 @@ local function main()
    uloop.init()
    mosq.init()
    uconn = setup_ubus()
-   et.init(VERSION)
+   ect.init(VERSION)
    mqtt = mosq.new()
    setup_mqtt()
 
@@ -188,7 +188,7 @@ end
 -- ################################################## --
 
 
-if et.opts.daemon then
+if ect.opts.daemon then
    system.forkme()
 end
 main()
