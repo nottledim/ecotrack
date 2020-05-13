@@ -50,7 +50,6 @@ local tostring = function(...)
   return table.concat(t, " ")
 end
 
-
 log.log = function(level, ...)
    if levels[level] then
       log[level](...)
