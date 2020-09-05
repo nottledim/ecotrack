@@ -6,7 +6,7 @@
 
    Original:   6-May-20
 
-   Last-modified: 2020-05-12  12:17:05 on penguin.lingbrae"
+   Last-modified: 2020-09-05  11:55:29 on penguin.lingbrae"
 
 --]]
 
@@ -79,6 +79,17 @@ local get_status = function()
    return status.result.ports[1]
 end
 
+local set_pause = function(pause)
+   -- set_mode, the parameter is 1 for solar, 2 for normal, 3 for pause!
+   local status = uconn:call("evse.control", "set_mode", {port = 1, mode = pause and 3 or 2})--{ name = "eth0" })
+   if status == nil then
+      log.error("UBUS ERROR - status: no answer from EVSE")
+      do return end
+   else
+      log.info("ECO mode: charging " .. (pause and "OFF" or "ON"))
+   end
+end
+
 local function send_status_message()
    if conf["topic_pub_status"] then
       local status = get_status()
@@ -149,22 +160,31 @@ local cmdtab = {
 -- Initial mode at start
 function init(version)
    log.info("Ecotrack starting")
-
-   last = get_status().current_max
+   local status = get_status()
+   last = status.current_max
+   active = status.mode ~= 3
    local f = cmdtab[conf["start_mode"] or "auto"]
    if f then f() end
+   --[[
    if mode == "eco" then
       active = false
    else
       active = true
    end
-   last_rq = active
+   if active then
+      set_pause(false)
+   else
+      set_pause(true)
+   end
+   --]]
 
-if opts.version and version then
-   log.info("Config: %s", pretty.write(conf))
-   local v = utils.split(version, "%s+")
-   utils.quit("Version: %s %s", v[3], v[4])
-end
+   last_rq = active
+   
+   if opts.version and version then
+      log.info("Config: %s", pretty.write(conf))
+      local v = utils.split(version, "%s+")
+      utils.quit("Version: %s %s", v[3], v[4])
+   end
 end
 
 local function charger_rq(rq)
@@ -172,9 +192,9 @@ local function charger_rq(rq)
       active = activate
       last_rq = activate
       if active then
-	 log.info("ECO mode: charging ON")
-      else      
-	 log.info("ECO mode: charging OFF")
+	 set_pause(false)
+      else
+	 set_pause(true)
       end
    end
 
