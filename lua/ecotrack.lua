@@ -7,7 +7,7 @@
    Original:   6-May-20
 --]]
 local VERSION = [[
-   Last-modified: 2020-05-13  10:22:08 on penguin.lingbrae" ]]
+   Last-modified: 2021-04-10  12:47:06 on penguin.lingbrae" ]]
 --[[
    Description :  ecotrack: a mash of the original:
    a) github.com/mastrogippo/Prism-UBUS-MQTT-LUA-daemon, 
@@ -26,7 +26,7 @@ local mosq = require "mosquitto"
 app.require_here()
 local log = require "log"
 local system = require "system" -- signal and fork
-local ect = require "ect"       -- ecotrack functions
+local ect = require "ect2"       -- ecotrack functions
 
 local MOSQ_IDLE_LOOP_MS = 250
 local UBUS_IDLE_LOOP_MS = 250

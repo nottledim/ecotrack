@@ -6,7 +6,7 @@
 
    Original:   6-May-20
 
-   Last-modified: 2020-09-05  11:55:29 on penguin.lingbrae"
+   Last-modified: 2021-06-14  16:14:58 on penguin.lingbrae"
 
 --]]
 
@@ -109,6 +109,11 @@ local function send_status_message()
 	 st.enabled = active
 	 st.energy = string.format("%.1fkW.h", status.energy_session / 1000)
 	 st.period = os.date("!%X", status._session_time_stm)
+	 if st.status == 'charging' then
+	    st.current = status.current_now
+	    st.voltage = status.voltage_now
+	    st.power = status.power_now
+	 end
 	 local mid = mqtt:publish(conf["topic_pub_status"], cjson.encode(st), 0, false)
 	 log.debug("status message")
       end
@@ -116,20 +121,66 @@ local function send_status_message()
    end
 end
 
+local function t_expired()
+   return os.difftime(os.time(), eco_since) >= ECO_DWELL
+end
+
+local function charger_rq(rq)
+   local charger_ctl = function(activate)
+      active = activate
+      last_rq = activate
+      set_pause(not active)
+   end
+
+   if mode == "eco" then
+      if rq ~= nil then
+	 if rq == active then
+	    last_rq = active
+	    log.debug("revert change")
+	 elseif rq ~= active and active == last_rq then
+	    last_rq = rq
+	    eco_since = os.time()
+	    log.debug("start timer")
+	 elseif rq ~= active and active ~= last_rq and t_expired() then
+	    log.debug("timeout charger 1")
+	    charger_ctl(rq)
+	 end
+      elseif active ~= last_rq and t_expired() then
+	 log.debug("timeout charger 2")
+	 charger_ctl(last_rq)
+      end
+   elseif not active and curr ~= 0 then
+      log.debug("start charger not eco")
+      charger_ctl(true)
+   end
+end
+
 local change_current = function()
    if  curr ~= last  then
-      last = curr 
-      local rtn = uconn:call("evse.control", "set_current", {port = 1, current_max = curr} )
-      if rtn == nil then
-	 log.error("UBUS ERROR - no answer from EVSE")
-	 do return end
+      if curr == 0 then
+	 charger_rq(false)
+	 active = false
+	 last_rq = false
       else
-	 log.info( "Current set to %dA", curr)
-	 if conf["topic_pub_ca"] then
-	    local mid = mqtt:publish(conf["topic_pub_ca"], tostring(curr), 0, false)
+	 if last == 0 then
+	    charger_rq(true)
+	    if curr < cmin then
+	       curr = cmin
+	    end
 	 end
-	 send_status_message()
+	 local rtn = uconn:call("evse.control", "set_current", {port = 1, current_max = curr} )
+	 if rtn == nil then
+	    log.error("UBUS ERROR - no answer from EVSE")
+	    do return end
+	 else
+	    log.info( "Current set to %dA", curr)
+	    if conf["topic_pub_ca"] then
+	       local mid = mqtt:publish(conf["topic_pub_ca"], tostring(curr), 0, false)
+	    end
+	    send_status_message()
+	 end
       end
+      last = curr 
    end
 end
 
@@ -152,6 +203,11 @@ local cmdtab = {
    end,
    min = function()
       curr = cmin
+      mode = "manual"
+      change_current()
+   end,
+   pause = function()
+      curr = 0
       mode = "manual"
       change_current()
    end
@@ -187,40 +243,6 @@ function init(version)
    end
 end
 
-local function charger_rq(rq)
-   local charger_ctl = function(activate)
-      active = activate
-      last_rq = activate
-      if active then
-	 set_pause(false)
-      else
-	 set_pause(true)
-      end
-   end
-
-   if mode == "eco" then
-      if rq ~= nil then
-	 if rq == active then
-	    last_rq = active
-	    log.debug("revert change")
-	 elseif rq ~= active and active == last_rq then
-	    last_rq = rq
-	    eco_since = os.time()
-	    log.debug("start timer")
-	 elseif rq ~= active and active ~= last_rq and os.difftime(os.time(), eco_since) >= ECO_DWELL then
-	    log.debug("timeout charger 1")
-	    charger_ctl(rq)
-	 end
-      elseif active ~= last_rq and os.difftime(os.time(), eco_since) >= ECO_DWELL then
-	 log.debug("timeout charger 2")
-	 charger_ctl(last_rq)
-      end
-   elseif not active then
-      log.debug("start charger not eco")
-      charger_ctl(true)
-   end
-end
-
 local function handle_ON_MESSAGE(mid, topic, payload, qos, retain)
    if topic == topics.data then
       local emon = cjson.decode(tostring(payload))
@@ -233,9 +255,11 @@ local function handle_ON_MESSAGE(mid, topic, payload, qos, retain)
 	       if status.connected then
 		  if mode == "eco" then
 		     if active and surplus < -ECO_UNDER_LIMIT then
-			charger_rq(false)
+			curr = 0
+			change_current()
 		     elseif not active and (surplus > ECO_OVER_LIMIT) then
-			charger_rq(true)
+			curr = cmin
+			change_current()
 		     end
 		  end
 		  if status.status == 'charging' then 
