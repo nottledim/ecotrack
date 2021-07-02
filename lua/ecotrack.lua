@@ -26,7 +26,7 @@ local mosq = require "mosquitto"
 app.require_here()
 local log = require "log"
 local system = require "system" -- signal and fork
-local ect = require "ect2"       -- ecotrack functions
+local ect = require "ect"       -- ecotrack functions
 
 local MOSQ_IDLE_LOOP_MS = 250
 local UBUS_IDLE_LOOP_MS = 250
