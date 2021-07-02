@@ -6,7 +6,7 @@
 
    Original:   6-May-20
 
-   Last-modified: 2021-06-14  16:14:58 on penguin.lingbrae"
+   Last-modified: 2021-07-01  18:16:36 on penguin.lingbrae"
 
 --]]
 
@@ -17,7 +17,7 @@ local log = require "log"
 local CONFIG_FILE_NAME = "ecotrack.cfg"
 local LOG_FILE_NAME = "/tmp/ecotrack.log"
 local ECO_OVER_LIMIT = 700      -- +ve surplus energy to change active state
-local ECO_UNDER_LIMIT = 250     -- -ve surplus energy to change active state
+local ECO_UNDER_LIMIT = -250     -- -ve surplus energy to change active state
 
 lapp.add_type ("level", "string",
 	       function(v)
@@ -54,12 +54,12 @@ local topics = {
 }
 
 local stm_since = os.time()
-local eco_since = 0
+local eco_since = os.time()
 
-local STM_DWELL = 120   -- (s) delay between publishing status messages
+local STM_DWELL = 60   -- (s) delay between publishing status messages
 local ECO_DWELL = 60    -- (s) delay between eco active state changes 
 
-local cmin= tonumber(conf["min_curr"] or 6)
+local cmin = tonumber(conf["min_curr"] or 6)
 local cmax = tonumber(conf["max_curr"] or 16)   -- max avail from solar
 local umax = tonumber(conf["max_evse"] or 32)   -- max from evse
 local hyst = tonumber(conf["hysteresis"] or 0.93)
@@ -125,7 +125,7 @@ local function t_expired()
    return os.difftime(os.time(), eco_since) >= ECO_DWELL
 end
 
-local function charger_rq(rq)
+local function charger_rq(rq)  -- true: turn on, false: turn off
    local charger_ctl = function(activate)
       active = activate
       last_rq = activate
@@ -141,11 +141,11 @@ local function charger_rq(rq)
 	    last_rq = rq
 	    eco_since = os.time()
 	    log.debug("start timer")
-	 elseif rq ~= active and active ~= last_rq and t_expired() then
+	 elseif rq ~= active and active ~= last_rq and t-expired then
 	    log.debug("timeout charger 1")
 	    charger_ctl(rq)
 	 end
-      elseif active ~= last_rq and t_expired() then
+      elseif active ~= last_rq and t_expired then
 	 log.debug("timeout charger 2")
 	 charger_ctl(last_rq)
       end
@@ -158,12 +158,14 @@ end
 local change_current = function()
    if  curr ~= last  then
       if curr == 0 then
-	 charger_rq(false)
+	 set_pause(true)
 	 active = false
 	 last_rq = false
+--	 charger_rq(false)
       else
 	 if last == 0 then
-	    charger_rq(true)
+--	    charger_rq(true)
+	    set_pause(false)
 	    if curr < cmin then
 	       curr = cmin
 	    end
@@ -221,6 +223,7 @@ function init(version)
    active = status.mode ~= 3
    local f = cmdtab[conf["start_mode"] or "auto"]
    if f then f() end
+   if mode == "auto" then curr = cmin end
    --[[
    if mode == "eco" then
       active = false
@@ -254,12 +257,14 @@ local function handle_ON_MESSAGE(mid, topic, payload, qos, retain)
 	    if (status) then
 	       if status.connected then
 		  if mode == "eco" then
-		     if active and surplus < -ECO_UNDER_LIMIT then
-			curr = 0
-			change_current()
+		     if active and (surplus < ECO_UNDER_LIMIT) then
+			charger_rq(false)
+--			curr = 0
+--			change_current()
 		     elseif not active and (surplus > ECO_OVER_LIMIT) then
-			curr = cmin
-			change_current()
+			charger_rq(true)
+--			curr = cmin
+--			change_current()
 		     end
 		  end
 		  if status.status == 'charging' then 
