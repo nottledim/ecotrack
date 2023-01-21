@@ -8,7 +8,7 @@
 
    23-Apr-22 RJM Added energy limit
 
-   Last-modified: 2022-04-24  18:39:03 on penguin.lingbrae"
+   Last-modified: 2023-01-21  14:28:25 on penguin.lingbrae"
 
 --]]
 
@@ -272,14 +272,14 @@ local function handle_ON_MESSAGE(mid, topic, payload, qos, retain)
 	 local surplus = emon.ev - emon.pwr1
 	 local status = get_status()
 	 if (status) then
-	    if status.connected and (limit > 0) then
-	       if (status.energy_session >= limit) then
-		  limit = 0
-		  cmdtab["pause"]() -- change mode
-	       end
-	    else
-	       limit = 0
-	    end
+--	    if status.connected and (limit > 0) then
+--	       if (status.energy_session >= limit) then
+--		  limit = 0
+--		  cmdtab["pause"]() -- change mode
+--	       end
+--	    else
+--	       limit = 0
+--	    end
 	    if mode ~= "manual" then  -- auto or eco
 	       if status.connected then
 		  if mode == "eco" then
@@ -312,6 +312,21 @@ local function handle_ON_MESSAGE(mid, topic, payload, qos, retain)
 	    send_status_message()
 	 end
          log.trace("Flow: %.1f Solar: %.1f  Surplus: %.1f  Incr: %s", emon.pwr1, emon.pwr2, surplus, incr)
+
+      elseif emon.type == 'day' then
+	 local status = get_status()
+	 if (status) then
+	    if status.connected and (limit > 0) then
+	       local ev = emon.ev/10.0
+	       if (ev >= limit) then
+		  limit = 0
+		  cmdtab["pause"]() -- change mode
+	       end
+	       log.debug("Limit - EV: %.1f Limit: %.1f", ev, limit)
+	    else
+	       limit = 0
+	    end
+	 end
       end
 
    elseif topic == topics.mode then
@@ -346,9 +361,15 @@ local function handle_ON_MESSAGE(mid, topic, payload, qos, retain)
       end
    elseif topic == topics.limit then
       if tonumber(payload) ~= nil then
-	 limit = tonumber(payload)
+	 limit = payload * 1.0
 	 log.info("Set energy limit to: %.1fkWh", limit)
 	 limit = limit * 1000
+	 local status = get_status()
+	 if (status) and
+	    status.connected and status.mode == 3 and status.energy_session < limit then
+	    eco_since = os.time()
+	    cmdtab["continue"]() -- change mode
+	 end
       else
 	 log.warn("ON_MESSAGE: topic:%s payload: %s", topic, payload)
       end
