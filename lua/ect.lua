@@ -6,7 +6,9 @@
 
    Original:   6-May-20
 
-   Last-modified: 2021-07-01  18:16:36 on penguin.lingbrae"
+   23-Apr-22 RJM Added energy limit
+
+   Last-modified: 2022-04-24  18:39:03 on penguin.lingbrae"
 
 --]]
 
@@ -50,7 +52,8 @@ end
 
 local topics = {
    data = conf["topic_data"] or "emon/data",
-   mode = conf["topic_control"] or "cmnd/prism/mode"
+   mode = conf["topic_control"] or "cmnd/prism/mode",
+   limit = conf["topic_limit"] or "cmnd/prism/limit"
 }
 
 local stm_since = os.time()
@@ -69,6 +72,8 @@ local curr = 0
 local mode = nil                -- manual, auto, eco
 local active = nil              -- active when enough surplus energy
 local last_rq = nil
+local last_mode = nil
+local limit = 0                 -- session energy limit. 0 is disabled
 
 local get_status = function()
    local status = uconn:call("evse.control", "get_status", {})--{ name = "eth0" })
@@ -109,6 +114,7 @@ local function send_status_message()
 	 st.enabled = active
 	 st.energy = string.format("%.1fkW.h", status.energy_session / 1000)
 	 st.period = os.date("!%X", status._session_time_stm)
+	 st.limit = limit / 1000
 	 if st.status == 'charging' then
 	    st.current = status.current_now
 	    st.voltage = status.voltage_now
@@ -141,7 +147,7 @@ local function charger_rq(rq)  -- true: turn on, false: turn off
 	    last_rq = rq
 	    eco_since = os.time()
 	    log.debug("start timer")
-	 elseif rq ~= active and active ~= last_rq and t-expired then
+	 elseif rq ~= active and active ~= last_rq and t_expired then
 	    log.debug("timeout charger 1")
 	    charger_ctl(rq)
 	 end
@@ -189,9 +195,11 @@ end
 local cmdtab = {
    eco = function()
       mode = "eco"
+      charger_rq(true)
    end,
    auto = function()
       mode="auto"
+      charger_rq(true)
    end,
    full = function()
       curr = umax
@@ -209,9 +217,19 @@ local cmdtab = {
       change_current()
    end,
    pause = function()
-      curr = 0
+      last_mode = mode
       mode = "manual"
+      curr = 0
       change_current()
+   end,
+   continue = function()
+      mode = last_mode or "manual"
+      if mode == "manual" then
+	 curr = last
+	 last = 0
+	 change_current()
+      end
+      charger_rq(true)
    end
 }
 
@@ -252,9 +270,17 @@ local function handle_ON_MESSAGE(mid, topic, payload, qos, retain)
       if emon.type == 'power' then
 	 local incr = math.floor(emon.pwr1 *-hyst/emon.volts +64) -63
 	 local surplus = emon.ev - emon.pwr1
-	 if mode ~= "manual" then  -- auto or eco
-	    local status = get_status()
-	    if (status) then
+	 local status = get_status()
+	 if (status) then
+	    if status.connected and (limit > 0) then
+	       if (status.energy_session >= limit) then
+		  limit = 0
+		  cmdtab["pause"]() -- change mode
+	       end
+	    else
+	       limit = 0
+	    end
+	    if mode ~= "manual" then  -- auto or eco
 	       if status.connected then
 		  if mode == "eco" then
 		     if active and (surplus < ECO_UNDER_LIMIT) then
@@ -318,7 +344,14 @@ local function handle_ON_MESSAGE(mid, topic, payload, qos, retain)
 	 end
 	 charger_rq()
       end
-
+   elseif topic == topics.limit then
+      if tonumber(payload) ~= nil then
+	 limit = tonumber(payload)
+	 log.info("Set energy limit to: %.1fkWh", limit)
+	 limit = limit * 1000
+      else
+	 log.warn("ON_MESSAGE: topic:%s payload: %s", topic, payload)
+      end
    else -- unexpected topic
       log.warn("ON_MESSAGE: topic:%s", topic)
    end
